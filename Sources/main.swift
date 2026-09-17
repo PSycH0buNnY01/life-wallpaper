@@ -262,6 +262,9 @@ final class Panel {
         view = LifeView(frame: NSRect(origin: .zero, size: f.size))
         window = DesktopWindow(contentRect: f, styleMask: [.borderless],
                                backing: .buffered, defer: false)
+        // Swift owns this window. Without this, close() releases it a second time and
+        // the app crashes after any settings change.
+        window.isReleasedWhenClosed = false
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.ignoresMouseEvents = true
