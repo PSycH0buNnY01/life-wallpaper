@@ -20,34 +20,27 @@ Requires macOS 13 Ventura or later. Works on Apple Silicon and Intel.
 
 ## Use
 
-Everything is in the menu bar icon:
+Click the grid icon in the menu bar and choose **Settings…** to change anything, and see it happen right away:
 
-| Menu | What it does |
-| --- | --- |
-| Pause / Resume | Freeze the board |
-| New Soup | Start over with a fresh random board |
-| Speed | 1, 4, 8 or 15 generations per second |
-| Cell Size | Small, medium or large cells |
-| Color | Mint, Amber, Ice, Rose, Mono |
-| Motion | **Smooth** crossfades and leaves an afterglow. **Snap** jumps one hard step per generation |
-| Launch at Login | Start automatically when you log in |
-| Hide Menu Bar Icon | The wallpaper keeps running. Open the app again to bring the icon back |
+- **Colors**: pick any color for the cells and for the background
+- **Speed**: from half a generation to 30 generations per second
+- **Cell size**, **density** and **afterglow**
+- **Crossfade**: on for smooth transitions, off for one hard step per generation
+
+The menu also has quick presets for speed, cell size, color and motion, plus Pause, New Soup, Launch at Login and Hide Menu Bar Icon. If you hid the icon, open the app again from Applications to bring it back along with the settings.
 
 Your choices are saved. When the pattern dies out or gets stuck in a loop, new cells are added automatically. When a display is fully covered by windows, it stops computing.
 
-## Custom colors and settings
+### From Terminal
 
-Any hex color works via `defaults`:
+The same settings are stored in `defaults`, if you'd rather script them:
 
 ```sh
 defaults write io.github.psych0bunny01.LifeWallpaper color FF7A45
-defaults write io.github.psych0bunny01.LifeWallpaper bg 101010
-defaults write io.github.psych0bunny01.LifeWallpaper density 0.25
+defaults write io.github.psych0bunny01.LifeWallpaper fps 4
 ```
 
-Then quit and reopen the app. Keys: `cell` (3–80), `fps` (0.5–30), `density` (0.02–0.9), `trail` (0–60), `fade` (seconds, `-1` = auto), `color`, `bg`.
-
-The binary also takes flags for a single run: `"Life Wallpaper.app/Contents/MacOS/LifeWallpaper" --help`.
+Then quit and reopen the app. Keys: `cell` (3–80), `fps` (0.5–30), `density` (0.02–0.9), `trail` (0–60), `fade` (seconds, `-1` = auto), `color`, `bg`. The binary also takes flags for a single run: `"Life Wallpaper.app/Contents/MacOS/LifeWallpaper" --help`.
 
 ## Uninstall
 

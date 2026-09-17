@@ -251,7 +251,7 @@ final class Panel {
     let window: DesktopWindow
     let view: LifeView
     let world: World
-    let renderer: Renderer?
+    var renderer: Renderer?
 
     init(screen: NSScreen, cfg: Config) {
         let f = screen.frame
@@ -278,7 +278,179 @@ final class Panel {
         if let img = renderer?.image(age: world.age) { view.show(img, fade: fade) }
     }
 
+    /// New colors without reseeding the board.
+    func recolor(cfg: Config) {
+        renderer = Renderer(gw: world.w, gh: world.h, cfg: cfg, trailMax: world.trailMax)
+        window.backgroundColor = NSColor(srgbRed: cfg.bg.0, green: cfg.bg.1, blue: cfg.bg.2, alpha: 1)
+        if let img = renderer?.image(age: world.age) { view.show(img, fade: 0) }
+    }
+
     func close() { window.orderOut(nil); window.close() }
+}
+
+// MARK: - Settings window
+
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    unowned let controller: Controller
+
+    private let fgWell = NSColorWell()
+    private let bgWell = NSColorWell()
+    private let speed = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let cell = NSSlider(value: 14, minValue: 4, maxValue: 40, target: nil, action: nil)
+    private let density = NSSlider(value: 0.16, minValue: 0.02, maxValue: 0.6, target: nil, action: nil)
+    private let trail = NSSlider(value: 10, minValue: 0, maxValue: 30, target: nil, action: nil)
+    private let smooth = NSButton(checkboxWithTitle: "Crossfade between generations", target: nil, action: nil)
+    private let speedLabel = NSTextField(labelWithString: "")
+    private let cellLabel = NSTextField(labelWithString: "")
+    private let densityLabel = NSTextField(labelWithString: "")
+    private let trailLabel = NSTextField(labelWithString: "")
+
+    // The speed slider is logarithmic: 0.5 … 30 generations per second.
+    private static let fpsMin = 0.5, fpsMax = 30.0
+    private static func fps(from t: Double) -> Double { fpsMin * pow(fpsMax / fpsMin, t) }
+    private static func position(for fps: Double) -> Double { log(fps / fpsMin) / log(fpsMax / fpsMin) }
+
+    init(controller: Controller) {
+        self.controller = controller
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
+                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        super.init()
+        window.title = "Life Wallpaper Settings"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+
+        for w in [fgWell, bgWell] {
+            w.target = self; w.action = #selector(colorsChanged)
+            w.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        }
+        for (s, sel) in [(speed, #selector(speedChanged)), (cell, #selector(boardChanged(_:))),
+                         (density, #selector(boardChanged(_:))), (trail, #selector(boardChanged(_:)))] {
+            s.target = self; s.action = sel; s.isContinuous = true
+            s.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        }
+        cell.numberOfTickMarks = 0
+        smooth.target = self; smooth.action = #selector(smoothChanged)
+        for l in [speedLabel, cellLabel, densityLabel, trailLabel] {
+            l.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            l.textColor = .secondaryLabelColor
+            l.widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
+        }
+
+        let empty = NSGridCell.emptyContentView
+        let grid = NSGridView(views: [
+            [label("Cells"), fgWell, empty],
+            [label("Background"), bgWell, empty],
+            [label("Speed"), speed, speedLabel],
+            [label("Cell size"), cell, cellLabel],
+            [label("Density"), density, densityLabel],
+            [label("Afterglow"), trail, trailLabel],
+            [empty, smooth, empty],
+        ])
+        grid.rowSpacing = 12
+        grid.columnSpacing = 12
+        grid.column(at: 0).xPlacement = .trailing
+        grid.rowAlignment = .firstBaseline
+        for r in 0..<2 { grid.row(at: r).yPlacement = .center; grid.row(at: r).rowAlignment = .none }
+
+        let soup = NSButton(title: "New Soup", target: self, action: #selector(newSoup))
+        let reset = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetDefaults))
+        let buttons = NSStackView(views: [soup, reset])
+        buttons.spacing = 8
+
+        let note = NSTextField(wrappingLabelWithString:
+            "Changing cell size, density or afterglow starts a fresh board.")
+        note.textColor = .secondaryLabelColor
+        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+
+        let stack = NSStackView(views: [grid, note, buttons])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 16
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        window.contentView = stack
+        refresh()
+    }
+
+    private func label(_ s: String) -> NSTextField { NSTextField(labelWithString: s) }
+
+    private func color(_ c: RGB) -> NSColor { NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1) }
+
+    private func rgb(_ c: NSColor) -> RGB {
+        let s = c.usingColorSpace(.sRGB) ?? NSColor.white
+        // Wide-gamut picks can land outside 0…1 in sRGB; the renderer needs bytes.
+        let f = { (v: CGFloat) in min(1, max(0, Double(v))) }
+        return (f(s.redComponent), f(s.greenComponent), f(s.blueComponent))
+    }
+
+    /// Pull the current settings into the controls.
+    func refresh() {
+        let c = controller.cfg
+        fgWell.color = color(c.fg)
+        bgWell.color = color(c.bg)
+        speed.doubleValue = Self.position(for: c.fps)
+        cell.integerValue = c.cell
+        density.doubleValue = c.density
+        trail.integerValue = c.trail
+        smooth.state = c.fade == 0 ? .off : .on
+        updateLabels()
+    }
+
+    private func updateLabels() {
+        let f = Self.fps(from: speed.doubleValue)
+        speedLabel.stringValue = f < 10 ? String(format: "%.1f gen/s", f) : String(format: "%.0f gen/s", f)
+        cellLabel.stringValue = "\(cell.integerValue) pt"
+        densityLabel.stringValue = "\(Int((density.doubleValue * 100).rounded())) %"
+        trailLabel.stringValue = trail.integerValue == 0 ? "off" : "\(trail.integerValue) gen"
+    }
+
+    func show() {
+        refresh()
+        NSColorPanel.shared.showsAlpha = false
+        if !window.isVisible { window.center() }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func colorsChanged() {
+        controller.setColors(fg: rgb(fgWell.color), bg: rgb(bgWell.color))
+    }
+
+    @objc private func speedChanged() {
+        updateLabels()
+        controller.changeSpeed(to: Self.fps(from: speed.doubleValue))
+    }
+
+    // Rebuilding the board is visible, so wait until the slider is released.
+    @objc private func boardChanged(_ s: NSSlider) {
+        updateLabels()
+        let dragging = NSApp.currentEvent?.type == .leftMouseDragged
+        if dragging { return }
+        controller.update { c in
+            c.cell = cell.integerValue
+            c.density = (density.doubleValue * 100).rounded() / 100
+            c.trail = trail.integerValue
+        }
+    }
+
+    @objc private func smoothChanged() {
+        controller.update { c in c.fade = smooth.state == .on ? -1 : 0 }
+    }
+
+    @objc private func newSoup() { controller.reseed() }
+
+    @objc private func resetDefaults() {
+        controller.update { c in
+            let keep = c.showMenu
+            c = Config()
+            c.showMenu = keep
+        }
+        refresh()
+    }
+
+    func windowWillClose(_ n: Notification) {
+        NSColorPanel.shared.orderOut(nil)
+    }
 }
 
 // MARK: - Menu bar presets
@@ -301,6 +473,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     var timer: Timer?
     var paused = false
     var statusItem: NSStatusItem?
+    var settings: SettingsWindow?
 
     var fade: Double { cfg.fade >= 0 ? cfg.fade : min(3.0, 0.9 / cfg.fps) }
 
@@ -318,8 +491,37 @@ final class Controller: NSObject, NSApplicationDelegate {
                                                             name: showMenuNote, object: nil)
     }
 
+    /// Opening the app while it already runs brings back the icon and shows the settings.
     @objc func showMenuAgain() {
         if statusItem == nil { setupMenu() }
+        openSettings()
+    }
+
+    @objc func openSettings() {
+        if settings == nil { settings = SettingsWindow(controller: self) }
+        settings?.show()
+    }
+
+    // MARK: Changes from the settings window
+
+    func setColors(fg: RGB, bg: RGB) {
+        cfg.fg = fg; cfg.bg = bg
+        Settings.save(cfg)
+        panels.forEach { $0.recolor(cfg: cfg) }
+        rebuildMenu()
+    }
+
+    func changeSpeed(to fps: Double) {
+        cfg.fps = fps
+        cfg = Settings.clamp(cfg)
+        Settings.save(cfg)
+        if !paused, timer != nil { startTimer() }
+        rebuildMenu()
+    }
+
+    func update(_ change: (inout Config) -> Void) {
+        change(&cfg)
+        apply()
     }
 
     func build() {
@@ -380,6 +582,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             action("Smooth — crossfade and afterglow", #selector(setMotion(_:)), tag: 0, on: !snap),
             action("Snap — one hard step per generation", #selector(setMotion(_:)), tag: 1, on: snap),
         ]))
+        m.addItem(action("Settings…", #selector(openSettings), key: ","))
         m.addItem(.separator())
         m.addItem(action("Launch at Login", #selector(toggleLogin),
                          on: SMAppService.mainApp.status == .enabled))
@@ -408,6 +611,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         Settings.save(cfg)
         build()
         rebuildMenu()
+        settings?.refresh()
     }
 
     @objc func togglePause() {
